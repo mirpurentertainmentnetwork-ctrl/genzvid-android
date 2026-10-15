@@ -303,3 +303,40 @@ jobs:
             desktop/dist/GEN_Z_VID-Installer-x64.msi
           retention-days: 30
           if-no-files-found: error
+
+  save-downloads:
+    name: Save packages in GitHub Releases
+    needs: [release, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download this build's packages
+        uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Publish versioned download archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: packages-${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/package-release-notes.txt"
+          cat > "$notes" <<'TXT'
+          GEN Z VID packages built from the Firebase website.
+          Android: signed AAB for Google Play and signed APK for direct installation.
+          Windows: portable EXE, Setup EXE, and MSI installer (unsigned).
+          Microsoft Store MSIX/AppX packages are not included until the app's Partner Center identity is configured.
+          These packages require internet access to load https://gen-z-vid.web.app.
+          TXT
+          mapfile -d '' files < <(find packages -type f -print0)
+          test "${#files[@]}" -gt 0
+          gh release create "$RELEASE_TAG" "${files[@]}" \
+            --target "$GITHUB_SHA" \
+            --title "GEN Z VID packages - build ${{ github.run_number }}" \
+            --notes-file "$notes"
