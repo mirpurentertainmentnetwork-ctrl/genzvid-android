@@ -71,15 +71,15 @@ jobs:
           cd genzvid
           cat > config.xml <<'XML'
           <?xml version="1.0" encoding="UTF-8"?>
-          <widget id="com.pmbsiam.genzvid" version="1.0.0"
+          <widget id="com.pmbsiam.genzvid" version="1.0.1"
               xmlns="http://www.w3.org/ns/widgets"
               xmlns:cdv="http://cordova.apache.org/ns/1.0">
-              <name>GEN Z VID</name>
+              <name>GEN Z VID Login Test</name>
               <description>Social media platform maker by PMB SIAM</description>
-              <author email="developer@pmbsiam.com" href="https://gen-z-vid.web.app">PMB SIAM</author>
-              <content src="https://gen-z-vid.web.app" />
+              <author email="developer@pmbsiam.com" href="https://gen-z-vid.firebaseapp.com">PMB SIAM</author>
+              <content src="https://gen-z-vid.firebaseapp.com" />
               <access origin="*" />
-              <allow-navigation href="https://gen-z-vid.web.app/*" />
+              <allow-navigation href="https://gen-z-vid.firebaseapp.com/*" />
               <allow-intent href="http://*/*" />
               <allow-intent href="https://*/*" />
               <preference name="LogLevel" value="ERROR" />
@@ -140,7 +140,7 @@ jobs:
                   layout.setOrientation(LinearLayout.VERTICAL);
                   layout.setPadding(32, 64, 32, 32);
                   TextView title = new TextView(this);
-                  title.setText("GEN Z VID");
+                  title.setText("GEN Z VID Login Test v1.0.1");
                   title.setTextSize(28);
                   layout.addView(title);
                   TextView info = new TextView(this);
@@ -155,7 +155,7 @@ jobs:
               }
               private void openSite() {
                   try {
-                      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gen-z-vid.web.app"));
+                      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gen-z-vid.firebaseapp.com"));
                       // Custom Tabs protocol: a null session lets compatible browsers open a browser tab.
                       Bundle extras = new Bundle();
                       extras.putBinder("android.support.customtabs.extra.SESSION", null);
@@ -168,8 +168,6 @@ jobs:
               }
           }
           JAVA
-          # Prevent Cordova prepare from restoring the original launcher activity.
-          cp genzvid/platforms/android/app/src/main/java/com/pmbsiam/genzvid/MainActivity.java genzvid/MainActivity-login.java
 
       - name: Build login test APK
         shell: bash
