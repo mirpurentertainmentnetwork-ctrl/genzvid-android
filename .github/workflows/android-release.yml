@@ -1,4 +1,4 @@
-name: Build signed Android bundle
+name: Build Android and Windows apps
 
 on:
   workflow_dispatch:
@@ -46,7 +46,7 @@ jobs:
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
           test -x "$sdk_root/cmdline-tools/latest/bin/sdkmanager"
           # Use a finite input file so pipefail cannot turn yes/SIGPIPE into a failure.
-          printf 'y\\n%.0s' {1..100} > "$RUNNER_TEMP/android-license-answers.txt"
+          printf 'y\n%.0s' {1..100} > "$RUNNER_TEMP/android-license-answers.txt"
           "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --licenses \
             < "$RUNNER_TEMP/android-license-answers.txt" > "$RUNNER_TEMP/android-licenses.log" 2>&1 || {
               tail -n 40 "$RUNNER_TEMP/android-licenses.log"
@@ -140,6 +140,136 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+
+      - name: Build signed Android APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd genzvid
+          cordova build android --release --buildConfig=build.json -- --packageType=apk
+          cp platforms/android/app/build/outputs/apk/release/app-release.apk ../GEN_Z_VID.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify ../GEN_Z_VID.apk
+
+      - name: Upload signed Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GEN_Z_VID-signed-apk
+          path: GEN_Z_VID.apk
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Remove temporary signing credentials
         if: always()
         run: rm -f genzvid/build.json signing/genzvid-release.keystore signing/ANDROID_KEYSTORE_BASE64.txt
+
+  windows:
+    name: Windows portable EXE
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Create Windows app source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir desktop
+          cd desktop
+          cat > package.json <<'JSON'
+          {
+            "name": "genzvid-desktop",
+            "version": "1.0.0",
+            "description": "GEN Z VID desktop app",
+            "author": "PMB SIAM",
+            "main": "main.js",
+            "private": true,
+            "devDependencies": {
+              "electron": "44.7.2",
+              "electron-builder": "26.15.3"
+            },
+            "build": {
+              "appId": "com.pmbsiam.genzvid.desktop",
+              "productName": "GEN Z VID",
+              "files": [
+                "main.js",
+                "package.json"
+              ],
+              "asar": true,
+              "win": {
+                "target": [
+                  {
+                    "target": "portable",
+                    "arch": [
+                      "x64"
+                    ]
+                  }
+                ],
+                "signAndEditExecutable": false
+              },
+              "artifactName": "GEN_Z_VID-Windows-${arch}.${ext}"
+            }
+          }
+          JSON
+          cat > main.js <<'JS'
+          const { app, BrowserWindow, shell, dialog } = require('electron');
+          const HOME = 'https://gen-z-vid.web.app';
+          let mainWindow;
+          function trusted(url) {
+            try { return new URL(url).origin === HOME; } catch { return false; }
+          }
+          function external(url) {
+            try {
+              if (new URL(url).protocol === 'https:') shell.openExternal(url).catch(() => {});
+            } catch {}
+          }
+          function createWindow() {
+            mainWindow = new BrowserWindow({
+              width: 1200, height: 800, minWidth: 360, minHeight: 540,
+              title: 'GEN Z VID', autoHideMenuBar: true,
+              webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+            });
+            mainWindow.webContents.on('will-navigate', (event, url) => {
+              if (!trusted(url)) { event.preventDefault(); external(url); }
+            });
+            mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+              external(url);
+              return { action: 'deny' };
+            });
+            mainWindow.loadURL(HOME).catch(() => {
+              dialog.showErrorBox('GEN Z VID', 'Could not open the website. Check your internet connection, then restart the app.');
+            });
+            mainWindow.on('closed', () => { mainWindow = null; });
+          }
+          app.whenReady().then(createWindow);
+          app.on('window-all-closed', () => app.quit());
+          app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+          JS
+          node --check main.js
+
+      - name: Build Windows portable EXE
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx electron-builder --win portable --x64 --publish never
+
+      - name: Verify Windows executable exists
+        shell: pwsh
+        run: |
+          $file = Get-Item desktop/dist/GEN_Z_VID-Windows-x64.exe
+          if ($file.Length -lt 1MB) { throw "Windows executable is unexpectedly small." }
+          $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Invalid Windows executable header." }
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: GEN_Z_VID-Windows-exe
+          path: desktop/dist/GEN_Z_VID-Windows-x64.exe
+          retention-days: 30
+          if-no-files-found: error
