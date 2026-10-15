@@ -163,7 +163,7 @@ jobs:
         run: rm -f genzvid/build.json signing/genzvid-release.keystore signing/ANDROID_KEYSTORE_BASE64.txt
 
   windows:
-    name: Windows portable EXE
+    name: Windows EXE and MSI installers
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
@@ -204,11 +204,31 @@ jobs:
                     "arch": [
                       "x64"
                     ]
+                  },
+                  {
+                    "target": "nsis",
+                    "arch": [
+                      "x64"
+                    ]
+                  },
+                  {
+                    "target": "msi",
+                    "arch": [
+                      "x64"
+                    ]
                   }
                 ],
                 "signAndEditExecutable": false
               },
-              "artifactName": "GEN_Z_VID-Windows-${arch}.${ext}"
+              "artifactName": "GEN_Z_VID-Windows-${arch}.${ext}",
+              "nsis": {
+                "artifactName": "GEN_Z_VID-Setup-${arch}.${ext}",
+                "oneClick": false,
+                "allowToChangeInstallationDirectory": true
+              },
+              "msi": {
+                "artifactName": "GEN_Z_VID-Installer-${arch}.${ext}"
+              }
             }
           }
           JSON
@@ -248,7 +268,7 @@ jobs:
           JS
           node --check main.js
 
-      - name: Build Windows portable EXE
+      - name: Build Windows portable EXE and installers
         working-directory: desktop
         shell: bash
         env:
@@ -256,7 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
-          npx electron-builder --win portable --x64 --publish never
+          npx electron-builder --win portable nsis msi --x64 --publish never
 
       - name: Verify Windows executable exists
         shell: pwsh
@@ -271,5 +291,15 @@ jobs:
         with:
           name: GEN_Z_VID-Windows-exe
           path: desktop/dist/GEN_Z_VID-Windows-x64.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: GEN_Z_VID-Windows-installers
+          path: |
+            desktop/dist/GEN_Z_VID-Setup-x64.exe
+            desktop/dist/GEN_Z_VID-Installer-x64.msi
           retention-days: 30
           if-no-files-found: error
