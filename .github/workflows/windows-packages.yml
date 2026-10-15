@@ -145,7 +145,7 @@ jobs:
         retention-days: 30
         if-no-files-found: error
     strategy:
-      fail-fast: 'false'
+      fail-fast: false
       matrix:
         include:
         - target: portable
@@ -173,7 +173,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: packages
-        merge-multiple: 'true'
+        merge-multiple: true
     - name: Publish versioned download archive
       shell: bash
       env:
