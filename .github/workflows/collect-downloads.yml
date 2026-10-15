@@ -1,0 +1,35 @@
+name: Collect all five app downloads
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/collect-downloads.yml'
+permissions:
+  contents: write
+  actions: read
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Retrieve signed Android packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 38774261618
+          pattern: GEN_Z_VID-signed-*
+          merge-multiple: true
+          path: packages
+      - name: Add Android packages beside the three Windows downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s packages/GEN_Z_VID.aab
+          test -s packages/GEN_Z_VID.apk
+          gh release upload windows-38776200946 packages/GEN_Z_VID.aab packages/GEN_Z_VID.apk --clobber
+          gh release edit windows-38776200946 --title "GEN Z VID - all 5 Android and Windows downloads" --notes "Five downloads: signed Android AAB and APK, plus Windows portable EXE, Setup EXE, and MSI. Android packages are from run 38774261618; Windows packages are from run 38776200946. Windows packages are unsigned and open the website in your default browser. Internet is required. Microsoft Store MSIX/AppX packages are not included."
+          gh release view windows-38776200946 --json assets --jq '.assets[].name'
