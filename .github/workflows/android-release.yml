@@ -71,21 +71,27 @@ jobs:
           cd genzvid
           cat > config.xml <<'XML'
           <?xml version="1.0" encoding="UTF-8"?>
-          <widget id="com.pmbsiam.genzvid" version="1.0.0"
+          <widget id="com.pmbsiam.genzvid" version="1.0.1"
               xmlns="http://www.w3.org/ns/widgets"
               xmlns:cdv="http://cordova.apache.org/ns/1.0">
               <name>GEN Z VID</name>
               <description>Social media platform maker by PMB SIAM</description>
-              <author email="developer@pmbsiam.com" href="https://gen-z-vid.web.app">PMB SIAM</author>
-              <content src="https://gen-z-vid.web.app" />
+              <author email="developer@pmbsiam.com" href="https://gen-z-vid.firebaseapp.com">PMB SIAM</author>
+              <content src="https://gen-z-vid.firebaseapp.com" />
               <access origin="*" />
-              <allow-navigation href="https://gen-z-vid.web.app/*" />
+              <allow-navigation href="https://gen-z-vid.firebaseapp.com/*" />
               <allow-intent href="http://*/*" />
               <allow-intent href="https://*/*" />
               <preference name="LogLevel" value="ERROR" />
-              <preference name="android-versionCode" value="${{ github.run_number }}" />
+              <preference name="android-versionCode" value="100000000" />
           </widget>
           XML
+          node <<'VERSION'
+          const fs = require('fs');
+          const code = String(100000000 + Number(process.env.GITHUB_RUN_NUMBER));
+          const xml = fs.readFileSync('config.xml', 'utf8').replace('value="100000000"', 'value="' + code + '"');
+          fs.writeFileSync('config.xml', xml);
+          VERSION
           cordova platform add android@15.1.0
 
       - name: Restore release keystore from Secrets
@@ -116,6 +122,60 @@ jobs:
             }}
           }), { mode: 0o600 });
           JS
+
+      - name: Use browser session for website and Google login
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > genzvid/platforms/android/app/src/main/java/com/pmbsiam/genzvid/MainActivity.java <<'JAVA'
+          package com.pmbsiam.genzvid;
+          
+          import org.apache.cordova.CordovaActivity;
+          import android.os.Bundle;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.widget.TextView;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.Toast;
+          
+          public class MainActivity extends CordovaActivity {
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  LinearLayout layout = new LinearLayout(this);
+                  layout.setOrientation(LinearLayout.VERTICAL);
+                  layout.setPadding(32, 64, 32, 32);
+                  TextView title = new TextView(this);
+                  title.setText("GEN Z VID");
+                  title.setTextSize(28);
+                  layout.addView(title);
+                  TextView info = new TextView(this);
+                  info.setText("Opening GEN Z VID…");
+                  layout.addView(info);
+                  Button open = new Button(this);
+                  open.setText("Open GEN Z VID");
+                  open.setOnClickListener(v -> openSite());
+                  open.setVisibility(android.view.View.GONE);
+                  layout.addView(open);
+                  setContentView(layout);
+                  openSite();
+              }
+              private void openSite() {
+                  try {
+                      Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gen-z-vid.firebaseapp.com"));
+                      // Custom Tabs protocol: a null session lets compatible browsers open a browser tab.
+                      Bundle extras = new Bundle();
+                      extras.putBinder("android.support.customtabs.extra.SESSION", null);
+                      intent.putExtras(extras);
+                      intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 0);
+                      intent.putExtra("android.support.customtabs.extra.ENABLE_URLBAR_HIDING", true);
+                      startActivity(intent);
+                  } catch (android.content.ActivityNotFoundException e) {
+                      Toast.makeText(this, "Install or enable a web browser to open GEN Z VID.", Toast.LENGTH_LONG).show();
+                  }
+              }
+          }
+          JAVA
 
       - name: Build signed release bundle
         shell: bash
@@ -234,37 +294,28 @@ jobs:
           JSON
           cat > main.js <<'JS'
           const { app, BrowserWindow, shell, dialog } = require('electron');
-          const HOME = 'https://gen-z-vid.web.app';
+          const HOME = 'https://gen-z-vid.firebaseapp.com';
           let mainWindow;
-          function trusted(url) {
-            try { return new URL(url).origin === HOME; } catch { return false; }
+          function openSite() {
+            shell.openExternal(HOME).catch(() => {
+              dialog.showErrorBox('GEN Z VID', 'Could not open your browser. Enable a default web browser and try again.');
+            });
           }
-          function external(url) {
-            try {
-              if (new URL(url).protocol === 'https:') shell.openExternal(url).catch(() => {});
-            } catch {}
-          }
-          function createWindow() {
+          app.whenReady().then(() => {
             mainWindow = new BrowserWindow({
-              width: 1200, height: 800, minWidth: 360, minHeight: 540,
-              title: 'GEN Z VID', autoHideMenuBar: true,
-              webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true }
+              width: 520, height: 330, title: 'GEN Z VID', autoHideMenuBar: true,
+              webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
             });
             mainWindow.webContents.on('will-navigate', (event, url) => {
-              if (!trusted(url)) { event.preventDefault(); external(url); }
+              event.preventDefault();
+              if (url === HOME || url === HOME + '/') openSite();
             });
-            mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-              external(url);
-              return { action: 'deny' };
-            });
-            mainWindow.loadURL(HOME).catch(() => {
-              dialog.showErrorBox('GEN Z VID', 'Could not open the website. Check your internet connection, then restart the app.');
-            });
-            mainWindow.on('closed', () => { mainWindow = null; });
-          }
-          app.whenReady().then(createWindow);
+            mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+            const html = '<!doctype html><html><head><meta charset="utf-8"><title>GEN Z VID</title></head><body style="font-family:Segoe UI,sans-serif;padding:32px;background:#101827;color:white"><h1>GEN Z VID</h1><p>Your browser opens the app and keeps your Google login session.</p><a style="display:inline-block;padding:12px 20px;background:#ffce64;color:#141414;border-radius:8px;text-decoration:none" href="' + HOME + '">Open GEN Z VID</a></body></html>';
+            mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+            openSite();
+          });
           app.on('window-all-closed', () => app.quit());
-          app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
           JS
           node --check main.js
 
@@ -276,7 +327,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
-          npx electron-builder --win portable nsis msi --x64 --publish never
+          npx electron-builder --win portable --x64 --publish never
 
       - name: Verify Windows executable exists
         shell: pwsh
@@ -293,6 +344,15 @@ jobs:
           path: desktop/dist/GEN_Z_VID-Windows-x64.exe
           retention-days: 30
           if-no-files-found: error
+
+      - name: Build Windows installers
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          set -euo pipefail
+          npx electron-builder --win nsis msi --x64 --publish never
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
@@ -328,11 +388,12 @@ jobs:
           set -euo pipefail
           notes="$RUNNER_TEMP/package-release-notes.txt"
           cat > "$notes" <<'TXT'
-          GEN Z VID packages built from the Firebase website.
+          GEN Z VID v1.0.1 packages with browser-based Google login.
           Android: signed AAB for Google Play and signed APK for direct installation.
           Windows: portable EXE, Setup EXE, and MSI installer (unsigned).
+          Android uses the browser-tab login flow tested by the owner. Windows opens the system browser to keep Google login in one browser session.
           Microsoft Store MSIX/AppX packages are not included until the app's Partner Center identity is configured.
-          These packages require internet access to load https://gen-z-vid.web.app.
+          These packages require internet access to load https://gen-z-vid.firebaseapp.com.
           TXT
           mapfile -d '' files < <(find packages -type f -print0)
           test "${#files[@]}" -gt 0
