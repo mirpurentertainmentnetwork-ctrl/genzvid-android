@@ -1,0 +1,282 @@
+name: Build GEN Z VID animated splash v2
+'on':
+  workflow_dispatch: null
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/android-splash-v2.yml
+permissions:
+  contents: write
+jobs:
+  build-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+    - name: Check signing password
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${#KEYSTORE_PASSWORD}" -lt 16 ] || [ -z "$KEYSTORE_BASE64" ]; then
+          echo "::error::Add ANDROID_KEYSTORE_PASSWORD (at least 16 characters) and ANDROID_KEYSTORE_BASE64 as repository Actions secrets."
+          exit 1
+        fi
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Configure preinstalled Android SDK
+      shell: bash
+      run: |
+        set -euo pipefail
+        sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+        echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+        echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+        echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+        test -x "$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+        # Use a finite input file so pipefail cannot turn yes/SIGPIPE into a failure.
+        printf 'y\n%.0s' {1..100} > "$RUNNER_TEMP/android-license-answers.txt"
+        "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --licenses \
+          < "$RUNNER_TEMP/android-license-answers.txt" > "$RUNNER_TEMP/android-licenses.log" 2>&1 || {
+            tail -n 40 "$RUNNER_TEMP/android-licenses.log"
+            exit 1
+          }
+    - uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: 8.14.2
+    - name: Install Android SDK and Cordova
+      run: |
+        set -euo pipefail
+        sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+        npm install --global cordova@13.0.0
+    - name: Create Firebase WebView project
+      shell: bash
+      run: |
+        set -euo pipefail
+        cordova create genzvid com.pmbsiam.genzvid "GEN Z VID"
+        cd genzvid
+        cat > config.xml <<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <widget id="com.pmbsiam.genzvid" version="1.0.1"
+            xmlns="http://www.w3.org/ns/widgets"
+            xmlns:cdv="http://cordova.apache.org/ns/1.0">
+            <name>GEN Z VID</name>
+            <description>Social media platform maker by PMB SIAM</description>
+            <author email="developer@pmbsiam.com" href="https://gen-z-vid.firebaseapp.com">PMB SIAM</author>
+            <content src="https://gen-z-vid.firebaseapp.com" />
+            <access origin="*" />
+            <allow-navigation href="https://gen-z-vid.firebaseapp.com/*" />
+            <allow-intent href="http://*/*" />
+            <allow-intent href="https://*/*" />
+            <preference name="LogLevel" value="ERROR" />
+            <preference name="AndroidWindowSplashScreenBackground" value="#38176F" />
+            <preference name="android-versionCode" value="2" />
+        </widget>
+        XML
+        cordova platform add android@15.1.0
+    - name: Restore release keystore from Secrets
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        mkdir -p signing
+        printf '%s' "$KEYSTORE_BASE64" | base64 --decode > signing/genzvid-release.keystore
+        keytool -list -keystore signing/genzvid-release.keystore \
+          -storepass:env KEYSTORE_PASSWORD -alias genzvid_alias > /dev/null
+    - name: Configure release signing
+      shell: bash
+      run: |
+        set -euo pipefail
+        node <<'JS'
+        const fs = require('fs');
+        const path = require('path');
+        const password = process.env.KEYSTORE_PASSWORD;
+        fs.writeFileSync('genzvid/build.json', JSON.stringify({
+          android: { release: {
+            keystore: path.resolve('signing/genzvid-release.keystore'),
+            storePassword: password,
+            alias: 'genzvid_alias',
+            password: password,
+            keystoreType: 'jks'
+          }}
+        }), { mode: 0o600 });
+        JS
+    - name: Install animated gradient splash and tested browser-tab login
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat > genzvid/platforms/android/app/src/main/java/com/pmbsiam/genzvid/MainActivity.java <<'JAVA'
+        package com.pmbsiam.genzvid;
+
+        import org.apache.cordova.CordovaActivity;
+        import android.os.Bundle;
+        import android.os.Handler;
+        import android.os.Looper;
+        import android.content.Intent;
+        import android.net.Uri;
+        import android.graphics.*;
+        import android.view.View;
+        import android.animation.ValueAnimator;
+        import android.view.animation.OvershootInterpolator;
+        import android.widget.Toast;
+
+        public class MainActivity extends CordovaActivity {
+            private final Handler handler = new Handler(Looper.getMainLooper());
+            private SplashView splash;
+            private boolean opened = false;
+            private final Runnable launch = () -> openSite();
+            @Override public void onCreate(Bundle state) {
+                super.onCreate(state);
+                getWindow().setStatusBarColor(Color.rgb(31, 15, 71));
+                getWindow().setNavigationBarColor(Color.rgb(18, 16, 49));
+                splash = new SplashView();
+                setContentView(splash);
+                if (state == null) handler.postDelayed(launch, 1700);
+                else opened = true;
+                splash.setOnClickListener(v -> openSite());
+            }
+            private void openSite() {
+                if (isFinishing()) return;
+                handler.removeCallbacks(launch);
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://gen-z-vid.firebaseapp.com"));
+                    Bundle extras = new Bundle();
+                    extras.putBinder("android.support.customtabs.extra.SESSION", null);
+                    intent.putExtras(extras);
+                    intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 0);
+                    intent.putExtra("android.support.customtabs.extra.ENABLE_URLBAR_HIDING", true);
+                    intent.putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", Color.rgb(16, 20, 27));
+                    startActivity(intent);
+                    opened = true;
+                    splash.stop();
+                } catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(this, "Enable a web browser, then tap to retry.", Toast.LENGTH_LONG).show();
+                }
+            }
+            @Override protected void onResume() {
+                super.onResume();
+                // Returning from the browser shows the branded screen without opening another tab.
+                if (opened && splash != null) splash.finishAnimation();
+            }
+            @Override public void onDestroy() {
+                handler.removeCallbacks(launch);
+                if (splash != null) splash.stop();
+                super.onDestroy();
+            }
+            private class SplashView extends View {
+                private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                private final ValueAnimator animator;
+                private float progress = 0f;
+                SplashView() {
+                    super(MainActivity.this);
+                    setContentDescription("GEN Z VID. Create, watch and connect. Tap to open.");
+                    animator = ValueAnimator.ofFloat(0f, 1f);
+                    animator.setDuration(1450);
+                    animator.addUpdateListener(a -> { progress = (float)a.getAnimatedValue(); invalidate(); });
+                    animator.start();
+                }
+                void stop() { animator.cancel(); }
+                void finishAnimation() { animator.cancel(); progress = 1f; invalidate(); }
+                private void text(Canvas c, String text, float y, float size, int color, int alpha) {
+                    paint.setShader(null); paint.setColor(color); paint.setAlpha(alpha);
+                    paint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+                    paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(size);
+                    c.drawText(text, 200, y, paint); paint.setAlpha(255);
+                }
+                @Override protected void onDraw(Canvas original) {
+                    super.onDraw(original);
+                    float w=getWidth(), h=getHeight();
+                    paint.setShader(new LinearGradient(0,0,w,h,new int[]{0xFF38176F,0xFF761D91,0xFF214F9C,0xFF102B4F},null,Shader.TileMode.CLAMP));
+                    original.drawRect(0,0,w,h,paint); paint.setShader(null);
+                    float scale=Math.min(w/400f,h/720f);
+                    original.save(); original.translate((w-400*scale)/2,(h-720*scale)/2); original.scale(scale,scale);
+                    Canvas c=original;
+                    paint.setColor(0x26FF6BA9);c.drawCircle(355,120,135,paint);
+                    paint.setColor(0x2226E6EF);c.drawCircle(20,565,155,paint);
+                    paint.setColor(0x18FFFFFF);c.drawCircle(38,128,5,paint);c.drawCircle(340,515,6,paint);c.drawCircle(310,230,3,paint);
+                    float p=Math.min(1f,progress/0.65f);
+                    float pop=new OvershootInterpolator(1.1f).getInterpolation(p);
+                    c.save();c.scale(0.66f+0.34f*pop,0.66f+0.34f*pop,200,283);
+                    paint.setShader(new LinearGradient(133,215,267,349,new int[]{0xFFFFD76E,0xFFFF8A70,0xFFFF4D9A},null,Shader.TileMode.CLAMP));
+                    c.drawRoundRect(133,215,267,349,37,37,paint);paint.setShader(null);
+                    paint.setColor(Color.WHITE);Path play=new Path();play.moveTo(184,248);play.lineTo(184,316);play.lineTo(235,282);play.close();c.drawPath(play,paint);
+                    c.restore();
+                    float title=Math.max(0f,Math.min(1f,(progress-0.12f)/0.52f));
+                    float bounce=new OvershootInterpolator(0.8f).getInterpolation(title);
+                    c.save();c.scale(0.82f+0.18f*bounce,0.82f+0.18f*bounce,200,421);
+                    text(c,"GEN Z",414+(1-title)*22,54,Color.WHITE,(int)(255*title));
+                    paint.setShader(new LinearGradient(125,435,275,480,new int[]{0xFFFFDD78,0xFFFF8CAC},null,Shader.TileMode.CLAMP));
+                    paint.setTextSize(58);paint.setTextAlign(Paint.Align.CENTER);paint.setTypeface(Typeface.create("sans-serif",Typeface.BOLD));paint.setAlpha((int)(255*title));c.drawText("VID",200,477+(1-title)*16,paint);paint.setShader(null);paint.setAlpha(255);c.restore();
+                    float sub=Math.max(0f,Math.min(1f,(progress-0.45f)/0.5f));
+                    text(c,"CREATE  /  WATCH  /  CONNECT",522,12,0xFFE1DFF8,(int)(255*sub));
+                    for(int i=0;i<3;i++){paint.setColor(i==((int)(progress*8)%3)?0xFFFFD76E:0x667FFFFF);paint.setAlpha((int)(220*sub));c.drawCircle(184+i*16,569,3.5f,paint);}paint.setAlpha(255);
+                    text(c,"YOUR WORLD. YOUR VOICE.",662,10,0xFFC8C5E7,(int)(210*sub));
+                    original.restore();
+                }
+            }
+        }
+        JAVA
+    - name: Build signed release bundle
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd genzvid
+        cordova build android --release --buildConfig=build.json -- --packageType=bundle
+        cp platforms/android/app/build/outputs/bundle/release/app-release.aab ../app-release-v2.aab
+    - name: Verify bundle signature
+      shell: bash
+      run: |
+        set -euo pipefail
+        jarsigner -verify app-release-v2.aab > signature-check.txt
+        grep -q "jar verified" signature-check.txt
+    - name: Upload signed Android bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: GEN_Z_VID-v2-aab
+        path: app-release-v2.aab
+        retention-days: 30
+        if-no-files-found: error
+    - name: Build signed Android APK
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd genzvid
+        cordova build android --release --buildConfig=build.json -- --packageType=apk
+        cp platforms/android/app/build/outputs/apk/release/app-release.apk ../app-release-v2.apk
+        "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify ../app-release-v2.apk
+    - name: Verify package and exact v2 version metadata
+      shell: bash
+      run: |
+        set -euo pipefail
+        "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app-release-v2.apk > version-info.txt
+        head -n 1 version-info.txt
+        grep -q "name='com.pmbsiam.genzvid'" version-info.txt
+        grep -q "versionCode='2'" version-info.txt
+        grep -q "versionName='1.0.1'" version-info.txt
+    - name: Upload signed Android APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: GEN_Z_VID-v2-apk
+        path: app-release-v2.apk
+        retention-days: 30
+        if-no-files-found: error
+    - name: Remove temporary signing credentials
+      if: always()
+      run: rm -f genzvid/build.json signing/genzvid-release.keystore signing/ANDROID_KEYSTORE_BASE64.txt
+    - name: Append v2 downloads without removing earlier release assets
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        gh release upload windows-38776200946 app-release-v2.apk app-release-v2.aab
+        gh release edit windows-38776200946 --title "GEN Z VID - original downloads and animated splash v2"
+        gh release view windows-38776200946 --json assets --jq '.assets[].name'
+    name: Build signed splash v2 APK and AAB
