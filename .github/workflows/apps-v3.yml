@@ -316,6 +316,8 @@ jobs:
       if: always()
       run: rm -f genzvid/build.json signing/genzvid-release.keystore signing/ANDROID_KEYSTORE_BASE64.txt
     name: Android v3 signed AAB and APK
+    needs:
+    - callback-check
   windows:
     name: Windows v3 in-app EXE
     runs-on: windows-2022
@@ -460,8 +462,10 @@ jobs:
         path: desktop/dist/GEN_Z_VID-Windows-v3-x64.exe
         retention-days: 30
         if-no-files-found: error
+    needs:
+    - callback-check
   publish:
-    name: Append three v3 packages beside all previous downloads
+    name: Replace corrected v3 and remove superseded release downloads
     needs:
     - android
     - windows
@@ -475,7 +479,7 @@ jobs:
         pattern: GEN_Z_VID-v3-*
         merge-multiple: true
         path: packages
-    - name: Publish v3 without replacing earlier assets
+    - name: Publish fixed v3 packages and remove earlier app binaries
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -485,6 +489,28 @@ jobs:
         test -s packages/app-release-v3.aab
         test -s packages/app-release-v3.apk
         test -s packages/GEN_Z_VID-Windows-v3-x64.exe
-        gh release upload windows-38776200946 packages/app-release-v3.aab packages/app-release-v3.apk packages/GEN_Z_VID-Windows-v3-x64.exe
-        gh release edit windows-38776200946 --title "GEN Z VID - original, v2 splash, and v3 Supabase apps"
+        gh release upload windows-38776200946 packages/app-release-v3.aab packages/app-release-v3.apk packages/GEN_Z_VID-Windows-v3-x64.exe --clobber
+        # Remove only GEN Z VID binaries from older releases, after the corrected files exist.
+        gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[] | .tag_name as $tag | .assets[] | select(.name | test("^(GEN_Z_VID|app-release).*\\.(aab|apk|exe|msi|zip)$"; "i")) | [$tag,.name] | @tsv' > old-assets.tsv
+        while IFS=$'\t' read -r tag name; do
+          if [ "$tag" = windows-38776200946 ]; then
+            case "$name" in app-release-v3.apk|app-release-v3.aab|GEN_Z_VID-Windows-v3-x64.exe) continue ;; esac
+          fi
+          gh release delete-asset "$tag" "$name" --yes
+        done < old-assets.tsv
+        gh release edit windows-38776200946 --title "GEN Z VID v3 - corrected login callback" --notes "Corrected Version 3 downloads only. Android versionCode 3 and versionName 1.0.2. The live OAuth callback page is now deployed and checked before packaging. Signed APK and AAB, plus unsigned Windows x64 EXE. End-to-end Google sign-in still needs device verification. Older binary downloads were removed at the owner's request."
         gh release view windows-38776200946 --json assets --jq '.assets[].name'
+  callback-check:
+    name: Verify live OAuth callback before packaging
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Reject missing callback pages
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl --retry 2 -fsSL https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site/auth/callback -o callback.html
+        grep -q '/auth-callback.js' callback.html
+        curl --retry 2 -fsSL 'https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site/auth-callback.js?v=callback-fix-1' -o callback.js
+        grep -q 'getSession' callback.js
+        grep -q 'finishDesktopSignIn' callback.js
+        printf 'Live callback page and session completion handler verified.\n'
