@@ -1,0 +1,135 @@
+name: Build GEN Z VID Windows v4 MSI with branded icon
+'on':
+  workflow_dispatch: null
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/windows-v4-msi.yml
+permissions:
+  contents: write
+jobs:
+  windows-installer:
+    name: Windows MSI 1.0.1 with GEN Z VID logo
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Create Windows app source
+      shell: bash
+      run: "set -euo pipefail\nmkdir desktop\ncd desktop\ncat > package.json <<'JSON'\n{\n  \"name\": \"genzvid-desktop\",\n  \"version\": \"1.0.1\",\n  \"description\": \"GEN Z VID desktop app\",\n  \"author\": \"PMB SIAM\",\n  \"main\": \"main.js\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"electron\": \"44.7.2\",\n    \"electron-builder\": \"26.15.3\",\n    \"sharp\": \"0.34.5\"\n  },\n  \"build\": {\n    \"appId\": \"com.pmbsiam.genzvid.desktop\",\n    \"productName\": \"GEN Z VID\",\n    \"files\": [\n      \"main.js\",\n      \"preload.js\",\n      \"package.json\",\n      \"build/icon.ico\"\n    ],\n    \"asar\": true,\n    \"win\": {\n      \"target\": [\n        {\n          \"target\": \"msi\",\n          \"arch\": [\n            \"x64\"\n          ]\n        }\n      ],\n      \"signAndEditExecutable\": true,\n      \"signExecutable\": false,\n      \"icon\": \"build/icon.ico\"\n    },\n    \"artifactName\": \"GEN_Z_VID-Installer-v4-${arch}.${ext}\",\n    \"executableName\"\
+        : \"GENZVID\",\n    \"msi\": {\n      \"artifactName\": \"GEN_Z_VID-Installer-v4-${arch}.${ext}\",\n      \"oneClick\": false,\n      \"perMachine\": false,\n      \"runAfterFinish\": false,\n      \"createDesktopShortcut\": true,\n      \"createStartMenuShortcut\": true\n    }\n  }\n}\nJSON\ncat > main.js <<'JS'\nconst {app,BrowserWindow,shell,ipcMain,dialog}=require('electron');\nconst path=require('path'),http=require('http'),crypto=require('crypto');\nconst SITE='https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site';\nlet mainWindow,pending=false;\nfunction isSite(url){try{return new URL(url).origin===SITE}catch{return false}}\nipcMain.handle('genzvid:sign-in',async event=>{\n if(event.sender!==mainWindow?.webContents||!isSite(event.senderFrame?.url))throw Error('Untrusted login request');\n if(pending)throw Error('A sign-in window is already open');pending=true;\n try{return await new Promise((resolve,reject)=>{\n  const state=crypto.randomBytes(32).toString('hex');let\
+        \ timer,port,done=false;\n  const complete=(error,session)=>{if(done)return;done=true;clearTimeout(timer);server.close();if(error)reject(error);else{mainWindow?.show();mainWindow?.focus();resolve(session)}};\n  const server=http.createServer((req,res)=>{\n   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');\n   if(req.method==='GET'&&req.url==='/callback'){\n    const nonce=crypto.randomBytes(16).toString('hex');res.setHeader('Content-Type','text/html; charset=utf-8');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`);\n    res.end(`<!doctype html><meta charset=\"utf-8\"><title>GEN Z VID</title><body style=\"font:20px system-ui;background:#201441;color:white;padding:12vh 10vw\"><h1>GEN Z VID</h1><p id=\"message\">Finishing sign-in\u2026</p><script nonce=\"${nonce}\"\
+        >const p=new URLSearchParams(location.hash.slice(1));history.replaceState(null,'','/callback');fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(p))}).then(r=>{if(!r.ok)throw Error();document.getElementById('message').textContent='Signed in. Return to the GEN Z VID app. You can close this tab.'}).catch(()=>document.getElementById('message').textContent='Sign-in did not complete. Please retry from the app.');</script>`);return;\n   }\n   if(req.method==='POST'&&req.url==='/session'&&req.headers.origin===`http://127.0.0.1:${port}`){\n    let body='';req.on('data',chunk=>{body+=chunk;if(body.length>20000)req.destroy()});\n    req.on('end',()=>{try{const data=JSON.parse(body);if(data.state!==state||typeof data.access_token!=='string'||typeof data.refresh_token!=='string')throw Error();res.writeHead(200);res.end('OK');complete(null,{access_token:data.access_token,refresh_token:data.refresh_token})}catch{res.writeHead(400);res.end('Invalid\
+        \ sign-in response')}});return;\n   }\n   res.writeHead(404);res.end();\n  });\n  server.on('error',error=>complete(error));server.listen(0,'127.0.0.1',()=>{port=server.address().port;timer=setTimeout(()=>complete(Error('Sign-in timed out. Please retry.')),180000);shell.openExternal(`${SITE}/desktop-auth.html?port=${port}&state=${state}`).catch(error=>complete(error))});\n })}finally{pending=false}\n});\napp.whenReady().then(()=>{\n mainWindow=new BrowserWindow({width:1280,height:840,minWidth:400,minHeight:600,title:'GEN Z VID',icon:path.join(__dirname,'build/icon.ico'),autoHideMenuBar:true,backgroundColor:'#211545',webPreferences:{preload:path.join(__dirname,'preload.js'),nodeIntegration:false,contextIsolation:true,sandbox:true}});\n mainWindow.webContents.on('will-navigate',(event,url)=>{if(!isSite(url)){event.preventDefault();try{if(new URL(url).protocol==='https:')shell.openExternal(url).catch(()=>{})}catch{}}});\n mainWindow.webContents.setWindowOpenHandler(({url})=>{try{if(new\
+        \ URL(url).protocol==='https:')shell.openExternal(url).catch(()=>{})}catch{}return {action:'deny'}});\n mainWindow.webContents.session.setPermissionRequestHandler(async(contents,permission,respond)=>{\n  if(contents!==mainWindow.webContents||!isSite(contents.getURL()))return respond(false);\n  if(permission==='fullscreen'||permission==='clipboard-sanitized-write')return respond(true);\n  if(permission==='media'||permission==='notifications'){const result=await dialog.showMessageBox(mainWindow,{type:'question',buttons:['Deny','Allow'],defaultId:0,cancelId:0,title:'GEN Z VID permission',message:`Allow this app to use ${permission==='media'?'your camera or microphone':'notifications'}?`});return respond(result.response===1)}respond(false);\n });\n mainWindow.loadURL(SITE).catch(()=>dialog.showErrorBox('GEN Z VID','Unable to load the website. Check your internet connection.'));\n});\napp.on('window-all-closed',()=>app.quit());\nJS\ncat > preload.js <<'JS'\nconst {contextBridge,ipcRenderer}=require('electron');\n\
+        contextBridge.exposeInMainWorld('genzvidDesktop',{signIn:()=>ipcRenderer.invoke('genzvid:sign-in')});\nJS\nnode --check main.js\nnode --check preload.js\n\nnode <<'SIGNCONFIG'\nconst fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));\np.build.win.signExecutable=Boolean(process.env.WIN_CSC_LINK);\nfs.writeFileSync('package.json',JSON.stringify(p,null,2));\nSIGNCONFIG\n"
+    - name: Install Windows build dependencies
+      working-directory: desktop
+      shell: bash
+      run: npm install --no-audit --no-fund
+    - name: Generate branded GEN Z VID logo and multi-resolution Windows icon
+      working-directory: desktop
+      shell: bash
+      run: 'set -euo pipefail
+
+        mkdir -p build
+
+        node <<''ICON''
+
+        const fs=require(''fs''),sharp=require(''sharp'');
+
+        const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#24124f"/><stop offset=".55" stop-color="#682ce8"/><stop offset="1" stop-color="#087fbc"/></linearGradient><linearGradient id="gold" x2="1" y2="1"><stop stop-color="#fff1a6"/><stop offset="1" stop-color="#efa934"/></linearGradient><linearGradient id="pink"><stop stop-color="#ff49c6"/><stop offset="1" stop-color="#91f3ff"/></linearGradient></defs><rect x="24" y="24" width="976" height="976" rx="218" fill="url(#bg)"/><rect x="49" y="49" width="926" height="926" rx="197" fill="none" stroke="#ffffff" stroke-opacity=".22" stroke-width="8"/><circle cx="512" cy="414" r="249" fill="#100b29" fill-opacity=".45" stroke="url(#pink)" stroke-width="15"/><path d="M447 281 Q431 272 431 292 V536 Q431 556 449 546 L649 428 Q671 414 649 401Z" fill="url(#gold)"/><path d="M769 178v56m-28-28h56M231 560v34m-17-17h34" stroke="#fff1a6" stroke-width="12"
+        stroke-linecap="round"/><text x="512" y="770" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="900" font-size="108" letter-spacing="2">GEN Z VID</text><rect x="348" y="819" width="328" height="12" rx="6" fill="url(#gold)"/></svg>`;
+
+        (async()=>{
+
+        fs.writeFileSync(''build/logo.svg'',svg);
+
+        await sharp(Buffer.from(svg)).png().toFile(''build/logo.png'');
+
+        const sizes=[16,24,32,48,64,128,256],images=await Promise.all(sizes.map(n=>sharp(Buffer.from(svg)).resize(n,n).png().toBuffer()));
+
+        const header=Buffer.alloc(6+16*sizes.length);header.writeUInt16LE(1,2);header.writeUInt16LE(sizes.length,4);let offset=header.length;
+
+        images.forEach((png,i)=>{let pos=6+i*16;header[pos]=sizes[i]===256?0:sizes[i];header[pos+1]=header[pos];header.writeUInt16LE(1,pos+4);header.writeUInt16LE(32,pos+6);header.writeUInt32LE(png.length,pos+8);header.writeUInt32LE(offset,pos+12);offset+=png.length});
+
+        fs.writeFileSync(''build/icon.ico'',Buffer.concat([header,...images]));
+
+        console.log(''Created GEN Z VID purple-blue / gold play logo, 7 icon resolutions.'');
+
+        })().catch(e=>{console.error(e);process.exit(1)});
+
+        ICON'
+    - name: Build offline MSI with embedded logo
+      working-directory: desktop
+      shell: bash
+      run: 'set -euo pipefail
+
+        npx electron-builder --win msi --x64 --publish never'
+    - name: Verify MSI branding, metadata and signing
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$msi=(Resolve-Path desktop/dist/GEN_Z_VID-Installer-v4-x64.msi).Path\nif ((Get-Item $msi).Length -lt 1MB) {throw 'Installer too small'}\n$wi=New-Object -ComObject WindowsInstaller.Installer\n$db=$wi.OpenDatabase($msi,0)\n$view=$db.OpenView('SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'')\n$view.Execute();$version=$view.Fetch().StringData(1)\nif ($version -ne '1.0.1') {throw \"Wrong MSI version $version\"}\n$view=$db.OpenView('SELECT `Name` FROM `Icon`');$view.Execute()\nif (-not $view.Fetch()) {throw 'MSI has no icon'}\n$sig=Get-AuthenticodeSignature $msi\nWrite-Host \"MSI version: $version; MSI signature: $($sig.Status); embedded icon verified.\"\nif ($env:WIN_CSC_LINK) {\n if ($sig.Status -ne 'Valid') {throw 'MSI trusted signature verification failed'}\n Get-ChildItem desktop/dist/win-unpacked -Recurse -File | Where-Object {$_.Extension -in '.exe','.dll','.node'} | ForEach-Object {if ((Get-AuthenticodeSignature $_.FullName).Status\
+        \ -ne 'Valid') {throw \"Unsigned PE: $($_.Name)\"}}\n} else {Write-Warning 'UNSIGNED: PC test build. Not ready for Microsoft Store MSI submission without trusted code signing.'}\n"
+    - name: Test quiet MSI install, logo and uninstall
+      shell: pwsh
+      run: '$ErrorActionPreference=''Stop''
+
+        Add-Type -AssemblyName System.Drawing
+
+        $msi=(Resolve-Path desktop/dist/GEN_Z_VID-Installer-v4-x64.msi).Path
+
+        $dest=Join-Path $env:RUNNER_TEMP ''GENZVID-MSI-test''
+
+        $log=Join-Path $env:RUNNER_TEMP ''genzvid-msi-install.log''
+
+        $p=Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart APPLICATIONFOLDER=`"$dest`" /L*v `"$log`"" -Wait -PassThru
+
+        if ($p.ExitCode -notin 0,3010) {Get-Content $log -Tail 70;throw "Install failed: $($p.ExitCode)"}
+
+        $exe=Join-Path $dest ''GENZVID.exe''
+
+        if (-not(Test-Path $exe)) {throw ''Installed app missing''}
+
+        if ((Get-Item $exe).VersionInfo.ProductVersion -notlike ''1.0.1*'') {throw ''Wrong installed version''}
+
+        $ico=[System.Drawing.Icon]::ExtractAssociatedIcon($exe)
+
+        if (-not $ico) {throw ''App icon missing''}
+
+        $ico.Dispose()
+
+        $p=Start-Process msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
+
+        if ($p.ExitCode -notin 0,3010) {throw ''Uninstall failed''}
+
+        Write-Host ''PASS: quiet MSI installation, app version, embedded application icon and quiet uninstall.''
+
+        '
+    - name: Upload MSI and logo
+      uses: actions/upload-artifact@v4
+      with:
+        name: GEN_Z_VID-Windows-v4-MSI
+        path: 'desktop/dist/*.msi
+
+          desktop/build/logo.png
+
+          desktop/build/logo.svg
+
+          desktop/build/icon.ico'
+        if-no-files-found: error
+    - name: Publish MSI release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: "set -euo pipefail\nfile=desktop/dist/GEN_Z_VID-Installer-v4-x64.msi\nsha256sum \"$file\" > desktop/dist/SHA256SUMS-msi-v4.txt\ncat > \"$RUNNER_TEMP/msi-notes.txt\" <<'NOTES'\nGEN Z VID Windows MSI. Release label v4; application version 1.0.1; Windows x64.\nIncludes new purple-blue and gold GEN Z VID logo on application, installer, desktop and Start menu shortcuts.\nWebsite opens inside the application; Google login uses the browser and returns to the app.\nStandalone offline installer. Website use requires internet.\nQuiet installer switches: /qn /norestart\nCI checks: MSI metadata/icon, quiet installation, installed executable version/icon, quiet uninstall.\nReal device login needs user testing.\nNOTES\nif [ -z \"$WIN_CSC_LINK\" ]; then\n printf '\\nUNSIGNED PC TEST BUILD. Microsoft Store EXE/MSI requires trusted CA signing of installer and all PE files; changing format does not resolve unsigned-package rejection.\\n' >> \"$RUNNER_TEMP/msi-notes.txt\"\nfi\ngh release create\
+        \ windows-v4-msi \"$file\" desktop/dist/SHA256SUMS-msi-v4.txt desktop/build/logo.png desktop/build/logo.svg desktop/build/icon.ico --target \"$GITHUB_SHA\" --title 'GEN Z VID v4 MSI - app 1.0.1 with logo' --notes-file \"$RUNNER_TEMP/msi-notes.txt\"\n"
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
