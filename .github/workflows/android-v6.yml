@@ -1,6 +1,9 @@
 name: Build GEN Z VID Android v6 with matching supplied logo and backup site
 'on':
   workflow_dispatch: null
+  push:
+    branches: [main]
+    paths: [.github/workflows/android-v6.yml]
 permissions:
   contents: write
 jobs:
