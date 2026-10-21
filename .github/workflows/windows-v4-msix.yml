@@ -1,0 +1,216 @@
+name: Build GEN Z VID MSIX v4
+'on':
+  workflow_dispatch:
+    inputs:
+      identity_name:
+        description: Exact Package/Identity/Name from MSIX Product identity; leave empty for DRAFT
+        required: false
+        type: string
+      identity_publisher:
+        description: Exact Package/Identity/Publisher (CN=...) from MSIX Product identity
+        required: false
+        type: string
+      publisher_display_name:
+        description: Exact Store PublisherDisplayName
+        required: false
+        default: PMB SIAM
+        type: string
+      display_name:
+        description: Reserved Store display name
+        required: false
+        default: GEN Z VID
+        type: string
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/windows-v4-msix.yml
+permissions:
+  contents: write
+jobs:
+  windows-installer:
+    name: MSIX v4 / app 1.0.1
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Create Windows app source
+      shell: bash
+      run: "set -euo pipefail\nmkdir desktop\ncd desktop\ncat > package.json <<'JSON'\n{\n  \"name\": \"genzvid-desktop\",\n  \"version\": \"1.0.1\",\n  \"description\": \"GEN Z VID desktop app\",\n  \"author\": \"PMB SIAM\",\n  \"main\": \"main.js\",\n  \"private\": true,\n  \"devDependencies\": {\n    \"electron\": \"44.7.2\",\n    \"electron-builder\": \"26.15.3\",\n    \"sharp\": \"0.34.5\"\n  },\n  \"build\": {\n    \"appId\": \"com.pmbsiam.genzvid.desktop\",\n    \"productName\": \"GEN Z VID\",\n    \"files\": [\n      \"main.js\",\n      \"preload.js\",\n      \"package.json\",\n      \"build/icon.ico\"\n    ],\n    \"asar\": true,\n    \"win\": {\n      \"target\": [\n        \"dir\"\n      ],\n      \"signAndEditExecutable\": true,\n      \"signExecutable\": false,\n      \"icon\": \"build/icon.ico\"\n    },\n    \"artifactName\": \"GEN_Z_VID-Installer-v4-${arch}.${ext}\",\n    \"executableName\": \"GENZVID\"\n  }\n}\nJSON\ncat > main.js <<'JS'\nconst {app,BrowserWindow,shell,ipcMain,dialog}=require('electron');\n\
+        const path=require('path'),http=require('http'),crypto=require('crypto');\nconst SITE='https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site';\nlet mainWindow,pending=false;\nfunction isSite(url){try{return new URL(url).origin===SITE}catch{return false}}\nipcMain.handle('genzvid:sign-in',async event=>{\n if(event.sender!==mainWindow?.webContents||!isSite(event.senderFrame?.url))throw Error('Untrusted login request');\n if(pending)throw Error('A sign-in window is already open');pending=true;\n try{return await new Promise((resolve,reject)=>{\n  const state=crypto.randomBytes(32).toString('hex');let timer,port,done=false;\n  const complete=(error,session)=>{if(done)return;done=true;clearTimeout(timer);server.close();if(error)reject(error);else{mainWindow?.show();mainWindow?.focus();resolve(session)}};\n  const server=http.createServer((req,res)=>{\n   res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');\n\
+        \   if(req.method==='GET'&&req.url==='/callback'){\n    const nonce=crypto.randomBytes(16).toString('hex');res.setHeader('Content-Type','text/html; charset=utf-8');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'`);\n    res.end(`<!doctype html><meta charset=\"utf-8\"><title>GEN Z VID</title><body style=\"font:20px system-ui;background:#201441;color:white;padding:12vh 10vw\"><h1>GEN Z VID</h1><p id=\"message\">Finishing sign-in\u2026</p><script nonce=\"${nonce}\">const p=new URLSearchParams(location.hash.slice(1));history.replaceState(null,'','/callback');fetch('/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(p))}).then(r=>{if(!r.ok)throw Error();document.getElementById('message').textContent='Signed in. Return to the GEN Z VID app. You can close this tab.'}).catch(()=>document.getElementById('message').textContent='Sign-in\
+        \ did not complete. Please retry from the app.');</script>`);return;\n   }\n   if(req.method==='POST'&&req.url==='/session'&&req.headers.origin===`http://127.0.0.1:${port}`){\n    let body='';req.on('data',chunk=>{body+=chunk;if(body.length>20000)req.destroy()});\n    req.on('end',()=>{try{const data=JSON.parse(body);if(data.state!==state||typeof data.access_token!=='string'||typeof data.refresh_token!=='string')throw Error();res.writeHead(200);res.end('OK');complete(null,{access_token:data.access_token,refresh_token:data.refresh_token})}catch{res.writeHead(400);res.end('Invalid sign-in response')}});return;\n   }\n   res.writeHead(404);res.end();\n  });\n  server.on('error',error=>complete(error));server.listen(0,'127.0.0.1',()=>{port=server.address().port;timer=setTimeout(()=>complete(Error('Sign-in timed out. Please retry.')),180000);shell.openExternal(`${SITE}/desktop-auth.html?port=${port}&state=${state}`).catch(error=>complete(error))});\n })}finally{pending=false}\n});\napp.whenReady().then(()=>{\n\
+        \ mainWindow=new BrowserWindow({width:1280,height:840,minWidth:400,minHeight:600,title:'GEN Z VID',icon:path.join(__dirname,'build/icon.ico'),autoHideMenuBar:true,backgroundColor:'#211545',webPreferences:{preload:path.join(__dirname,'preload.js'),nodeIntegration:false,contextIsolation:true,sandbox:true}});\n mainWindow.webContents.on('will-navigate',(event,url)=>{if(!isSite(url)){event.preventDefault();try{if(new URL(url).protocol==='https:')shell.openExternal(url).catch(()=>{})}catch{}}});\n mainWindow.webContents.setWindowOpenHandler(({url})=>{try{if(new URL(url).protocol==='https:')shell.openExternal(url).catch(()=>{})}catch{}return {action:'deny'}});\n mainWindow.webContents.session.setPermissionRequestHandler(async(contents,permission,respond)=>{\n  if(contents!==mainWindow.webContents||!isSite(contents.getURL()))return respond(false);\n  if(permission==='fullscreen'||permission==='clipboard-sanitized-write')return respond(true);\n  if(permission==='media'||permission==='notifications'){const\
+        \ result=await dialog.showMessageBox(mainWindow,{type:'question',buttons:['Deny','Allow'],defaultId:0,cancelId:0,title:'GEN Z VID permission',message:`Allow this app to use ${permission==='media'?'your camera or microphone':'notifications'}?`});return respond(result.response===1)}respond(false);\n });\n mainWindow.loadURL(SITE).catch(()=>dialog.showErrorBox('GEN Z VID','Unable to load the website. Check your internet connection.'));\n});\napp.on('window-all-closed',()=>app.quit());\nJS\ncat > preload.js <<'JS'\nconst {contextBridge,ipcRenderer}=require('electron');\ncontextBridge.exposeInMainWorld('genzvidDesktop',{signIn:()=>ipcRenderer.invoke('genzvid:sign-in')});\nJS\nnode --check main.js\nnode --check preload.js\n\nnode <<'SIGNCONFIG'\nconst fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));\np.build.win.signExecutable=Boolean(process.env.WIN_CSC_LINK);\nfs.writeFileSync('package.json',JSON.stringify(p,null,2));\nSIGNCONFIG\n"
+    - name: Install Windows build dependencies
+      working-directory: desktop
+      shell: bash
+      run: npm install --no-audit --no-fund
+    - name: Generate branded GEN Z VID logo and multi-resolution Windows icon
+      working-directory: desktop
+      shell: bash
+      run: 'set -euo pipefail
+
+        mkdir -p build
+
+        node <<''ICON''
+
+        const fs=require(''fs''),sharp=require(''sharp'');
+
+        const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#24124f"/><stop offset=".55" stop-color="#682ce8"/><stop offset="1" stop-color="#087fbc"/></linearGradient><linearGradient id="gold" x2="1" y2="1"><stop stop-color="#fff1a6"/><stop offset="1" stop-color="#efa934"/></linearGradient><linearGradient id="pink"><stop stop-color="#ff49c6"/><stop offset="1" stop-color="#91f3ff"/></linearGradient></defs><rect x="24" y="24" width="976" height="976" rx="218" fill="url(#bg)"/><rect x="49" y="49" width="926" height="926" rx="197" fill="none" stroke="#ffffff" stroke-opacity=".22" stroke-width="8"/><circle cx="512" cy="414" r="249" fill="#100b29" fill-opacity=".45" stroke="url(#pink)" stroke-width="15"/><path d="M447 281 Q431 272 431 292 V536 Q431 556 449 546 L649 428 Q671 414 649 401Z" fill="url(#gold)"/><path d="M769 178v56m-28-28h56M231 560v34m-17-17h34" stroke="#fff1a6" stroke-width="12"
+        stroke-linecap="round"/><text x="512" y="770" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-weight="900" font-size="108" letter-spacing="2">GEN Z VID</text><rect x="348" y="819" width="328" height="12" rx="6" fill="url(#gold)"/></svg>`;
+
+        (async()=>{
+
+        fs.writeFileSync(''build/logo.svg'',svg);
+
+        await sharp(Buffer.from(svg)).png().toFile(''build/logo.png'');
+
+        const sizes=[16,24,32,48,64,128,256],images=await Promise.all(sizes.map(n=>sharp(Buffer.from(svg)).resize(n,n).png().toBuffer()));
+
+        const header=Buffer.alloc(6+16*sizes.length);header.writeUInt16LE(1,2);header.writeUInt16LE(sizes.length,4);let offset=header.length;
+
+        images.forEach((png,i)=>{let pos=6+i*16;header[pos]=sizes[i]===256?0:sizes[i];header[pos+1]=header[pos];header.writeUInt16LE(1,pos+4);header.writeUInt16LE(32,pos+6);header.writeUInt32LE(png.length,pos+8);header.writeUInt32LE(offset,pos+12);offset+=png.length});
+
+        fs.writeFileSync(''build/icon.ico'',Buffer.concat([header,...images]));
+
+        console.log(''Created GEN Z VID purple-blue / gold play logo, 7 icon resolutions.'');
+
+        })().catch(e=>{console.error(e);process.exit(1)});
+
+        ICON'
+    - name: Build offline MSI with embedded logo
+      working-directory: desktop
+      shell: bash
+      run: 'set -euo pipefail
+
+        npx electron-builder --win msi --x64 --publish never'
+    - name: Package embedded Windows application
+      shell: bash
+      working-directory: desktop
+      run: 'set -euo pipefail
+
+        npx electron-builder --win --dir --x64 --publish never'
+    - name: Create MSIX manifest and branded tile assets
+      shell: bash
+      working-directory: desktop
+      run: 'set -euo pipefail
+
+        node <<''MANIFEST''
+
+        const fs=require(''fs''),sharp=require(''sharp'');
+
+        const name=process.env.MSIX_NAME||'''',publisher=process.env.MSIX_PUBLISHER||'''';
+
+        if(Boolean(name)!==Boolean(publisher))throw Error(''Supply both Store Name and Publisher, or leave both empty for a DRAFT'');
+
+        const draft=!name;
+
+        if(!draft&&(!/^[A-Za-z0-9.-]{3,50}$/.test(name)||!publisher.startsWith(''CN='')))throw Error(''Invalid Store identity'');
+
+        const identity={name:draft?''PMBSIAM.GENZVID.Draft'':name,publisher:draft?''CN=GENZVIDDevelopment'':publisher,displayName:process.env.MSIX_DISPLAY||''GEN Z VID'',publisherDisplayName:process.env.MSIX_PUBLISHER_DISPLAY||''PMB SIAM'',version:''1.0.1.0'',draft};
+
+        const esc=s=>s.replaceAll(''&'',''&amp;'').replaceAll(''<'',''&lt;'').replaceAll(''>'',''&gt;'').replaceAll(''"'',''&quot;'').replaceAll("''",''&apos;'');
+
+        fs.mkdirSync(''msix/Assets'',{recursive:true});
+
+        fs.cpSync(''dist/win-unpacked'',''msix/app'',{recursive:true});
+
+        const xml=`<?xml version="1.0" encoding="utf-8"?>
+
+        <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap rescap">
+
+        <Identity Name="${esc(identity.name)}" Publisher="${esc(identity.publisher)}" Version="1.0.1.0" ProcessorArchitecture="x64"/>
+
+        <Properties><DisplayName>${esc(identity.displayName)}</DisplayName><PublisherDisplayName>${esc(identity.publisherDisplayName)}</PublisherDisplayName><Description>GEN Z VID social video desktop app</Description><Logo>Assets\\StoreLogo.png</Logo></Properties>
+
+        <Resources><Resource Language="en-US"/><Resource Language="bn-BD"/></Resources>
+
+        <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/></Dependencies>
+
+        <Applications><Application Id="GENZVID" Executable="app\\GENZVID.exe" EntryPoint="Windows.FullTrustApplication"><uap:VisualElements DisplayName="${esc(identity.displayName)}" Description="GEN Z VID social video desktop app" BackgroundColor="#24124f" Square150x150Logo="Assets\\Square150x150Logo.png" Square44x44Logo="Assets\\Square44x44Logo.png"><uap:DefaultTile Wide310x150Logo="Assets\\Wide310x150Logo.png" Square310x310Logo="Assets\\Square310x310Logo.png"/></uap:VisualElements></Application></Applications>
+
+        <Capabilities><Capability Name="internetClient"/><rescap:Capability Name="runFullTrust"/></Capabilities>
+
+        </Package>`;
+
+        fs.writeFileSync(''msix/AppxManifest.xml'',xml);
+
+        fs.writeFileSync(''dist/msix-identity.json'',JSON.stringify(identity,null,2));
+
+        const entries=[[''StoreLogo'',50,50],[''Square44x44Logo'',44,44],[''Square150x150Logo'',150,150],[''Square310x310Logo'',310,310],[''Wide310x150Logo'',310,150]];
+
+        (async()=>{for(const [n,w,h]of entries){await sharp(''build/logo.png'').resize(w,h,{fit:''contain'',background:''#24124f''}).png().toFile(''msix/Assets/''+n+''.png'')}console.log(''MSIX identity:'',JSON.stringify(identity));})().catch(e=>{console.error(e);process.exit(1)});
+
+        MANIFEST
+
+        '
+    - name: Build and inspect real MSIX using Windows SDK
+      shell: pwsh
+      run: '$ErrorActionPreference=''Stop''
+
+        $sdk=Get-ChildItem ''C:\Program Files (x86)\Windows Kits\10\bin'' -Directory | Sort-Object Name -Descending | Where-Object {Test-Path (Join-Path $_.FullName ''x64/MakeAppx.exe'')} | Select-Object -First 1
+
+        if (-not $sdk) {throw ''Windows SDK MakeAppx missing''}
+
+        $makeappx=Join-Path $sdk.FullName ''x64/MakeAppx.exe''
+
+        $identity=Get-Content desktop/dist/msix-identity.json -Raw | ConvertFrom-Json
+
+        $file=if($identity.draft){''GEN_Z_VID-v4-x64-DRAFT.msix''}else{''GEN_Z_VID-v4-x64.msix''}
+
+        & $makeappx pack /d desktop/msix /p "desktop/dist/$file" /h SHA256 /o
+
+        if($LASTEXITCODE -ne 0){throw ''MSIX pack/schema validation failed''}
+
+        & $makeappx unpack /p "desktop/dist/$file" /d desktop/msix-check /o
+
+        if($LASTEXITCODE -ne 0){throw ''MSIX unpack failed''}
+
+        [xml]$manifest=Get-Content desktop/msix-check/AppxManifest.xml -Raw
+
+        if($manifest.Package.Identity.Name -ne $identity.name -or $manifest.Package.Identity.Publisher -ne $identity.publisher){throw ''Identity mismatch''}
+
+        if($manifest.Package.Identity.Version -ne ''1.0.1.0''){throw ''Wrong version''}
+
+        $exe=''desktop/msix-check/app/GENZVID.exe''
+
+        if(-not(Test-Path $exe)){throw ''App executable missing''}
+
+        if((Get-Item $exe).VersionInfo.ProductVersion -notlike ''1.0.1*''){throw ''Executable version mismatch''}
+
+        foreach($tile in ''StoreLogo'',''Square44x44Logo'',''Square150x150Logo'',''Square310x310Logo'',''Wide310x150Logo''){if(-not(Test-Path "desktop/msix-check/Assets/$tile.png")){throw "Missing tile $tile"}}
+
+        if((Get-AuthenticodeSignature "desktop/dist/$file").Status -ne ''NotSigned''){throw ''Unexpected signature state''}
+
+        Write-Host ''PASS: MakeAppx schema validation, unpack, identity, version, executable and all branded tiles.''
+
+        Write-Host ''Unsigned MSIX. Correct Store identity is required for Store upload. No claim of device installation or WACK certification.''
+
+        '
+    - name: Upload MSIX and identity report
+      uses: actions/upload-artifact@v4
+      with:
+        name: GEN_Z_VID-v4-MSIX
+        path: 'desktop/dist/*.msix
+
+          desktop/dist/msix-identity.json
+
+          desktop/build/logo.png'
+        if-no-files-found: error
+    - name: Publish clearly labelled MSIX package
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: "set -euo pipefail\nfile=$(find desktop/dist -maxdepth 1 -name '*.msix' -print -quit)\nsha256sum \"$file\" > desktop/dist/SHA256SUMS-msix-v4.txt\nif [[ \"$file\" == *DRAFT* ]]; then\n tag=\"windows-v4-msix-draft-$GITHUB_RUN_ID\"\n title='GEN Z VID v4 MSIX DRAFT - Store identity required'\n cat > \"$RUNNER_TEMP/msix-notes.txt\" <<'NOTES'\nGEN Z VID v4 MSIX DRAFT. App/package version 1.0.1 / 1.0.1.0, x64.\nIncludes purple-blue / gold GEN Z VID app icon and Windows tile assets.\nTHIS DRAFT MUST NOT BE SUBMITTED TO MICROSOFT STORE: it uses development identity, not Partner Center identity.\nRun the same workflow with the exact MSIX Package/Identity/Name, Package/Identity/Publisher and PublisherDisplayName to generate the Store package.\nAn EXE/MSI product ID is not an MSIX package identity.\nUnsigned MSIX is intended for packaging checks. Direct device installation requires an appropriate signing/development setup.\nNOTES\nelse\n tag=\"windows-v4-msix-$GITHUB_RUN_ID\"\n title='GEN\
+        \ Z VID v4 MSIX - Partner Center identity configured'\n cat > \"$RUNNER_TEMP/msix-notes.txt\" <<'NOTES'\nGEN Z VID v4 MSIX. App/package version 1.0.1 / 1.0.1.0, x64.\nUnsigned Store submission package. Verify the accompanying identity report matches your MSIX Partner Center product exactly.\nIncludes branded app and Windows tile icons. Website opens inside the app; Google sign-in uses browser return flow.\nReal device installation, login and Windows App Certification Kit tests are still required. Store certification is not guaranteed.\nMicrosoft signs MSIX after certification; EXE/MSI signing rules differ.\nNOTES\nfi\nprintf '\\nBuild validation: MakeAppx schema validation, package unpack, identity, version, executable and tile assets checked.\\n' >> \"$RUNNER_TEMP/msix-notes.txt\"\ngh release create \"$tag\" \"$file\" desktop/dist/msix-identity.json desktop/dist/SHA256SUMS-msix-v4.txt desktop/build/logo.png --prerelease --target \"$GITHUB_SHA\" --title \"$title\" --notes-file \"\
+        $RUNNER_TEMP/msix-notes.txt\"\n"
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      MSIX_NAME: ${{ inputs.identity_name }}
+      MSIX_PUBLISHER: ${{ inputs.identity_publisher }}
+      MSIX_PUBLISHER_DISPLAY: ${{ inputs.publisher_display_name }}
+      MSIX_DISPLAY: ${{ inputs.display_name }}
