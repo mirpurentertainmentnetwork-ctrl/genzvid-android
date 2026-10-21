@@ -1,0 +1,231 @@
+name: Build GEN Z VID Android v6 with matching supplied logo and backup site
+'on':
+  workflow_dispatch: null
+permissions:
+  contents: write
+jobs:
+  android-v6:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Require the supplied logo input
+      shell: bash
+      run: 'set -euo pipefail
+
+        test -s assets/android-v6/play-store-icon.png.base64 || { echo ''::error::Approved supplied logo input is missing. Do not build with a default icon.''; exit 1; }
+
+        base64 --decode assets/android-v6/play-store-icon.png.base64 > play-store-icon-v6-512.png
+
+        echo ''cb16a30ec02d974ea1be04cd8ed7cd26afc7b0316ae789e924dbd7c0c5490aa4  play-store-icon-v6-512.png'' | sha256sum --check
+
+        python3 -m venv "$RUNNER_TEMP/branding-venv"
+
+        "$RUNNER_TEMP/branding-venv/bin/pip" install Pillow==11.3.0
+
+        echo "BRAND_PYTHON=$RUNNER_TEMP/branding-venv/bin/python" >> "$GITHUB_ENV"
+
+        '
+    - name: Check both websites, callbacks and verified app links
+      shell: bash
+      run: "set -euo pipefail\npython3 <<'CHECK'\nimport urllib.request,json\nfor host in ['https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site','https://genzvid.pmbsiamofficial.com']:\n    with urllib.request.urlopen(host+'/',timeout=20) as r:\n        assert r.status==200\n        assert 'GEN Z VID' in r.read(32768).decode('utf-8')\n    with urllib.request.urlopen(host+'/auth/callback',timeout=20) as r:\n        assert r.status==200\n        assert 'auth-callback' in r.read().decode('utf-8')\n    with urllib.request.urlopen(host+'/.well-known/assetlinks.json',timeout=20) as r:\n        entries=json.load(r)\n    assert any(x.get('target',{}).get('package_name')=='com.pmbsiam.genzvid' and '13:56:36:39:C5:9E:78:CB:AA:E1:D3:8B:35:9F:8C:7E:BF:28:B1:DA:51:32:F4:27:E1:FB:FC:D7:3E:50:69:39' in x['target'].get('sha256_cert_fingerprints',[]) for x in entries)\n    print('PASS website, callback and app links:',host)\nCHECK\n"
+    - name: Check signing password
+      shell: bash
+      run: "set -euo pipefail\nif [ \"${#KEYSTORE_PASSWORD}\" -lt 16 ] || [ -z \"$KEYSTORE_BASE64\" ]; then\n  echo \"::error::Add ANDROID_KEYSTORE_PASSWORD (at least 16 characters) and ANDROID_KEYSTORE_BASE64 as repository Actions secrets.\"\n  exit 1\nfi\n"
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Configure preinstalled Android SDK
+      shell: bash
+      run: "set -euo pipefail\nsdk_root=\"${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}\"\necho \"ANDROID_HOME=$sdk_root\" >> \"$GITHUB_ENV\"\necho \"$sdk_root/cmdline-tools/latest/bin\" >> \"$GITHUB_PATH\"\necho \"$sdk_root/platform-tools\" >> \"$GITHUB_PATH\"\ntest -x \"$sdk_root/cmdline-tools/latest/bin/sdkmanager\"\n# Use a finite input file so pipefail cannot turn yes/SIGPIPE into a failure.\nprintf 'y\\n%.0s' {1..100} > \"$RUNNER_TEMP/android-license-answers.txt\"\n\"$sdk_root/cmdline-tools/latest/bin/sdkmanager\" --licenses \\\n  < \"$RUNNER_TEMP/android-license-answers.txt\" > \"$RUNNER_TEMP/android-licenses.log\" 2>&1 || {\n    tail -n 40 \"$RUNNER_TEMP/android-licenses.log\"\n    exit 1\n  }\n"
+    - uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: 8.14.2
+    - name: Install Android SDK and Cordova
+      run: 'set -euo pipefail
+
+        sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+        npm install --global cordova@13.0.0
+
+        '
+    - name: Create GEN Z VID v6 project with persistent branding hook
+      shell: bash
+      run: "set -euo pipefail\ncordova create genzvid com.pmbsiam.genzvid \"GEN Z VID\"\ncd genzvid\ncat > config.xml <<'XML'\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<widget id=\"com.pmbsiam.genzvid\" version=\"1.0.5\" android-versionCode=\"6\"\n    xmlns=\"http://www.w3.org/ns/widgets\"\n    xmlns:cdv=\"http://cordova.apache.org/ns/1.0\">\n    <name>GEN Z VID</name>\n    <description>Social media platform maker by PMB SIAM</description>\n    <author email=\"developer@pmbsiam.com\" href=\"https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site\">PMB SIAM</author>\n    <content src=\"https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site\" />\n    <access origin=\"*\" />\n    <allow-navigation href=\"https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site/*\" />\n    <allow-intent href=\"http://*/*\" />\n    <allow-intent href=\"https://*/*\" />\n    <preference name=\"LogLevel\" value=\"ERROR\" />\n    <preference name=\"AndroidWindowSplashScreenBackground\" value=\"\
+        #38176F\" />\n    <preference name=\"android-versionCode\" value=\"6\" />\n<hook type=\"after_prepare\" src=\"scripts/apply-branding.js\" />\n</widget>\nXML\nmkdir -p branding scripts\ncp ../play-store-icon-v6-512.png branding/play-store-icon-v6-512.png\ncat > scripts/apply-branding.js <<'HOOK'\nconst cp=require('child_process'),path=require('path');\nmodule.exports=function(context){cp.execFileSync(process.env.BRAND_PYTHON,[path.join(context.opts.projectRoot,'scripts/apply-branding.py')],{stdio:'inherit'});};\nHOOK\ncat > scripts/apply-branding.py <<'BRANDING'\nfrom pathlib import Path\nfrom PIL import Image\nimport xml.etree.ElementTree as E\nimport hashlib,json\n\nroot=Path(__file__).resolve().parents[1]\nbase=root/'platforms/android/app/src/main'\nres=base/'res';source=root/'branding/play-store-icon-v6-512.png'\nassert hashlib.sha256(source.read_bytes()).hexdigest()=='cb16a30ec02d974ea1be04cd8ed7cd26afc7b0316ae789e924dbd7c0c5490aa4'\nim=Image.open(source).convert('RGBA')\nfor\
+        \ density,size in [('ldpi',36),('mdpi',48),('hdpi',72),('xhdpi',96),('xxhdpi',144),('xxxhdpi',192)]:\n    d=res/f'mipmap-{density}';d.mkdir(parents=True,exist_ok=True)\n    im.resize((size,size),Image.Resampling.LANCZOS).save(d/'genzvid_icon.png')\nd=res/'drawable-nodpi';d.mkdir(parents=True,exist_ok=True)\nim.save(d/'genzvid_brand_logo.png')\n# Keep the complete supplied logo inside the adaptive icon safe region.\nlayer=Image.new('RGBA',(432,432),(0,0,0,0));small=im.resize((264,264),Image.Resampling.LANCZOS)\nlayer.alpha_composite(small,(84,84));layer.save(d/'genzvid_foreground.png')\nanydpi=res/'mipmap-anydpi-v26';anydpi.mkdir(exist_ok=True)\n(anydpi/'genzvid_icon.xml').write_text('<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\"><background android:drawable=\"@color/genzvid_icon_background\"/><foreground android:drawable=\"@drawable/genzvid_foreground\"/></adaptive-icon>')\n(res/'values/genzvid_brand.xml').write_text('<resources><color name=\"genzvid_icon_background\"\
+        >#03051D</color></resources>')\nns='http://schemas.android.com/apk/res/android';E.register_namespace('android',ns)\nmf=base/'AndroidManifest.xml';tree=E.parse(mf);app=tree.getroot().find('application')\napp.set(f'{{{ns}}}icon','@mipmap/genzvid_icon');app.set(f'{{{ns}}}roundIcon','@mipmap/genzvid_icon')\ntree.write(mf,encoding='utf-8',xml_declaration=True)\nprint('Applied exact supplied logo to launcher, round/adaptive icons and splash')\nBRANDING\ncordova platform add android@15.1.0\n"
+    - name: Restore release keystore from Secrets
+      shell: bash
+      run: "set -euo pipefail\numask 077\nmkdir -p signing\nprintf '%s' \"$KEYSTORE_BASE64\" | base64 --decode > signing/genzvid-release.keystore\nkeytool -list -keystore signing/genzvid-release.keystore \\\n  -storepass:env KEYSTORE_PASSWORD -alias genzvid_alias > /dev/null\n"
+    - name: Configure release signing
+      shell: bash
+      run: "set -euo pipefail\nnode <<'JS'\nconst fs = require('fs');\nconst path = require('path');\nconst password = process.env.KEYSTORE_PASSWORD;\nfs.writeFileSync('genzvid/build.json', JSON.stringify({\n  android: { release: {\n    keystore: path.resolve('signing/genzvid-release.keystore'),\n    storePassword: password,\n    alias: 'genzvid_alias',\n    password: password,\n    keystoreType: 'jks'\n  }}\n}), { mode: 0o600 });\nJS\n"
+    - name: Install supplied-logo splash and bounded primary/backup startup checks
+      shell: bash
+      run: "set -euo pipefail\ncat > genzvid/platforms/android/app/src/main/java/com/pmbsiam/genzvid/MainActivity.java <<'JAVA'\npackage com.pmbsiam.genzvid;\n\nimport org.apache.cordova.CordovaActivity;\nimport android.os.Bundle;\nimport android.os.Handler;\nimport android.os.Looper;\nimport android.net.Uri;\nimport android.graphics.*;\nimport android.view.View;\nimport android.animation.ValueAnimator;\nimport android.widget.Toast;\nimport android.content.ComponentName;\nimport androidx.browser.customtabs.*;\nimport androidx.browser.trusted.TrustedWebActivityIntentBuilder;\nimport java.net.HttpURLConnection;\nimport java.net.URL;\nimport java.nio.charset.StandardCharsets;\nimport java.util.Arrays;\nimport java.util.concurrent.ExecutorService;\nimport java.util.concurrent.Executors;\n\npublic class MainActivity extends CordovaActivity {\n    private static final String PRIMARY=\"https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site\";\n    private static final String BACKUP=\"https://genzvid.pmbsiamofficial.com\"\
+        ;\n    private final Handler handler=new Handler(Looper.getMainLooper());\n    private final ExecutorService network=Executors.newSingleThreadExecutor();\n    private CustomTabsSession browserSession;\n    private boolean bound,opened,checking,destroyed;\n    private int launchAttempts;\n    private String selected;\n    private SplashView splash;\n    private final Runnable launch=()->openSelectedSite();\n    private final CustomTabsServiceConnection connection=new CustomTabsServiceConnection(){\n        @Override public void onCustomTabsServiceConnected(ComponentName name,CustomTabsClient client){\n            client.warmup(0L);browserSession=client.newSession(new CustomTabsCallback());\n        }\n        @Override public void onServiceDisconnected(ComponentName name){browserSession=null;}\n    };\n    @Override public void onCreate(Bundle state){\n        super.onCreate(state);\n        getWindow().setStatusBarColor(0xFF04051D);getWindow().setNavigationBarColor(0xFF04051D);\n\
+        \        String provider=CustomTabsClient.getPackageName(this,Arrays.asList(\"com.android.chrome\",\"com.microsoft.emmx\",\"com.brave.browser\"));\n        if(provider!=null)bound=CustomTabsClient.bindCustomTabsService(this,provider,connection);\n        splash=new SplashView();setContentView(splash);\n        splash.setOnClickListener(v->{if(opened){opened=false;}checkSites();});\n        if(state==null)checkSites();else{opened=true;splash.stop();}\n    }\n    private boolean reachable(String origin){\n        HttpURLConnection c=null;\n        try{\n            c=(HttpURLConnection)new URL(origin+\"/\").openConnection();\n            c.setConnectTimeout(4000);c.setReadTimeout(4000);c.setInstanceFollowRedirects(true);\n            c.setRequestProperty(\"Accept\",\"text/html\");\n            int code=c.getResponseCode();\n            if(code<200||code>=300)return false;\n            Uri finalUri=Uri.parse(c.getURL().toString());\n            String finalOrigin=finalUri.getScheme()+\"\
+        ://\"+finalUri.getHost();\n            if(!PRIMARY.equals(finalOrigin)&&!BACKUP.equals(finalOrigin))return false;\n            String type=c.getContentType();\n            if(type==null||!type.toLowerCase(java.util.Locale.ROOT).contains(\"text/html\"))return false;\n            try(java.io.InputStream in=c.getInputStream()){\n                byte[] buffer=new byte[16384];int total=0,n;\n                while(total<buffer.length&&(n=in.read(buffer,total,buffer.length-total))>0){total+=n;}\n                return new String(buffer,0,total,StandardCharsets.UTF_8).contains(\"GEN Z VID\");\n            }\n        }catch(Exception e){return false;}finally{if(c!=null)c.disconnect();}\n    }\n    private void checkSites(){\n        if(checking||destroyed||isFinishing())return;\n        checking=true;launchAttempts=0;\n        final long start=android.os.SystemClock.elapsedRealtime();\n        network.execute(()->{\n            String found=reachable(PRIMARY)?PRIMARY:(reachable(BACKUP)?BACKUP:null);\n\
+        \            handler.post(()->{\n                if(destroyed||isFinishing())return;\n                checking=false;selected=found;\n                if(found==null){splash.stop();Toast.makeText(this,\"Unable to connect to either site. Check your connection and tap to retry.\",Toast.LENGTH_LONG).show();return;}\n                handler.postDelayed(launch,Math.max(0,1700-(android.os.SystemClock.elapsedRealtime()-start)));\n            });\n        });\n    }\n    private void openSelectedSite(){\n        if(destroyed||isFinishing()||selected==null||opened)return;\n        if(bound&&browserSession==null&&launchAttempts++<5){handler.postDelayed(launch,200);return;}\n        try{\n            Uri uri=Uri.parse(selected);\n            if(browserSession!=null){\n                new TrustedWebActivityIntentBuilder(uri)\n                  .setAdditionalTrustedOrigins(Arrays.asList(PRIMARY,BACKUP))\n                  .build(browserSession).launchTrustedWebActivity(this);\n            }else{\n\
+        \                new CustomTabsIntent.Builder().setShowTitle(false).setUrlBarHidingEnabled(true).build().launchUrl(this,uri);\n            }\n            opened=true;splash.stop();\n        }catch(android.content.ActivityNotFoundException e){Toast.makeText(this,\"Enable a supported browser, then tap to retry.\",Toast.LENGTH_LONG).show();}\n    }\n    @Override public void onDestroy(){\n        destroyed=true;handler.removeCallbacksAndMessages(null);network.shutdownNow();\n        if(splash!=null)splash.stop();if(bound){unbindService(connection);bound=false;}\n        super.onDestroy();\n    }\n    private class SplashView extends View {\n        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);\n        private final Bitmap logo=BitmapFactory.decodeResource(getResources(),R.drawable.genzvid_brand_logo);\n        private final ValueAnimator animation=ValueAnimator.ofFloat(0f,1f);\n        private float progress;\n        SplashView(){\n         \
+        \   super(MainActivity.this);setContentDescription(\"GEN Z VID. Connecting. Tap to retry.\");\n            animation.setDuration(1600);animation.setRepeatCount(ValueAnimator.INFINITE);\n            animation.addUpdateListener(a->{progress=(float)a.getAnimatedValue();invalidate();});animation.start();\n        }\n        void stop(){animation.cancel();progress=1f;invalidate();}\n        @Override protected void onDraw(Canvas c){\n            float w=getWidth(),h=getHeight();\n            paint.setShader(new LinearGradient(0,0,w,h,new int[]{0xFF160549,0xFF03051D,0xFF04365F},null,Shader.TileMode.CLAMP));\n            c.drawRect(0,0,w,h,paint);paint.setShader(null);\n            float size=Math.min(w*.88f,h*.60f),pop=.96f+.04f*(float)Math.sin(progress*Math.PI);\n            float side=size*pop,cx=w/2,cy=h*.46f;\n            if(logo!=null)c.drawBitmap(logo,null,new RectF(cx-side/2,cy-side/2,cx+side/2,cy+side/2),paint);\n            float dot=Math.max(3,w/110);\n            for(int i=0;i<3;i++){paint.setColor(i==((int)(progress*9)%3)?0xFF15DBFF:0xFF8D36FF);c.drawCircle(cx+(i-1)*dot*5,cy+size*.65f,dot,paint);}\n\
+        \        }\n    }\n}\nJAVA\n"
+    - name: Configure verified Trusted Web Activity with AndroidX Browser
+      shell: bash
+      run: 'set -euo pipefail
+
+        cat > genzvid/platforms/android/app/build-extras.gradle <<''GRADLE''
+
+        dependencies { implementation ''androidx.browser:browser:1.8.0'' }
+
+        GRADLE
+
+        python3 <<''MANIFEST''
+
+        from pathlib import Path
+
+        import xml.etree.ElementTree as E,json
+
+        base=Path(''genzvid/platforms/android/app/src/main'')
+
+        ns=''http://schemas.android.com/apk/res/android'';E.register_namespace(''android'',ns)
+
+        p=base/''AndroidManifest.xml'';tree=E.parse(p);root=tree.getroot();app=root.find(''application'')
+
+        E.SubElement(app,''meta-data'',{f''{{{ns}}}name'':''asset_statements'',f''{{{ns}}}resource'':''@string/asset_statements''})
+
+        queries=root.find(''queries'')
+
+        if queries is None:queries=E.SubElement(root,''queries'')
+
+        intent=E.SubElement(queries,''intent'');E.SubElement(intent,''action'',{f''{{{ns}}}name'':''android.support.customtabs.action.CustomTabsService''})
+
+        for pkg in [''com.android.chrome'',''com.microsoft.emmx'',''com.brave.browser'']:E.SubElement(queries,''package'',{f''{{{ns}}}name'':pkg})
+
+        tree.write(p,encoding=''utf-8'',xml_declaration=True)
+
+        resources=E.Element(''resources'');value=E.SubElement(resources,''string'',{''name'':''asset_statements'',''translatable'':''false''})
+
+        value.text=json.dumps([{''relation'':[''delegate_permission/common.handle_all_urls''],''target'':{''namespace'':''web'',''site'':host}} for host in [''https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site'',''https://genzvid.pmbsiamofficial.com'']]).replace(chr(34),chr(92)+chr(34))
+
+        E.ElementTree(resources).write(base/''res/values/asset_statements.xml'',encoding=''utf-8'',xml_declaration=True)
+
+        MANIFEST
+
+        '
+    - name: Build signed release bundle
+      shell: bash
+      run: 'set -euo pipefail
+
+        cd genzvid
+
+        cordova build android --release --buildConfig=build.json -- --packageType=bundle
+
+        cp platforms/android/app/build/outputs/bundle/release/app-release.aab ../app-release-v6.aab
+
+        '
+    - name: Verify bundle signature
+      shell: bash
+      run: 'set -euo pipefail
+
+        jarsigner -verify app-release-v6.aab > signature-check.txt
+
+        grep -q "jar verified" signature-check.txt
+
+        '
+    - name: Build signed Android APK
+      shell: bash
+      run: 'set -euo pipefail
+
+        cd genzvid
+
+        cordova build android --release --buildConfig=build.json -- --packageType=apk
+
+        cp platforms/android/app/build/outputs/apk/release/app-release.apk ../app-release-v6.apk
+
+        "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify ../app-release-v6.apk
+
+        '
+    - name: Verify versionCode 6, name 1.0.5 and launcher resource
+      shell: bash
+      run: 'set -euo pipefail
+
+        "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app-release-v6.apk > version-info.txt
+
+        head -n 1 version-info.txt
+
+        grep -q "name=''com.pmbsiam.genzvid''" version-info.txt
+
+        grep -q "versionCode=''6''" version-info.txt
+
+        grep -q "versionName=''1.0.5''" version-info.txt
+
+
+        "$ANDROID_HOME/build-tools/36.0.0/aapt" dump xmltree app-release-v6.apk AndroidManifest.xml > manifest-info.txt
+
+        grep -q ''android:icon'' manifest-info.txt
+
+        '
+    - name: Verify actual AAB and APK logo images match the Store listing icon
+      shell: bash
+      run: "set -euo pipefail\ncat > verify-branding.py <<'VERIFY'\nfrom pathlib import Path\nfrom PIL import Image\nimport zipfile,io,hashlib\nsource=Image.open('play-store-icon-v6-512.png').convert('RGBA')\nfor archive,prefix in [('app-release-v6.aab','base/'),('app-release-v6.apk','')]:\n    with zipfile.ZipFile(archive) as z:\n        names=z.namelist()\n        # aapt2 qualifies density folders with platform versions; inspect all actual packaged PNGs.\n        icons=[n for n in names if n.startswith(prefix+'res/mipmap-') and n.endswith('/genzvid_icon.png')]\n        assert len(icons)==6,(archive,icons)\n        for n in icons:\n            im=Image.open(io.BytesIO(z.read(n))).convert('RGBA')\n            expected=source.resize(im.size,Image.Resampling.LANCZOS)\n            assert im.tobytes()==expected.tobytes(),(archive,n,'logo pixel mismatch')\n        splash=[n for n in names if n.endswith('/genzvid_brand_logo.png')]\n        assert len(splash)==1\n        assert Image.open(io.BytesIO(z.read(splash[0]))).convert('RGBA').tobytes()==source.tobytes()\n\
+        \        assert any(n.endswith('/genzvid_foreground.png') for n in names)\n        assert any('mipmap-anydpi-v26' in n and n.endswith('/genzvid_icon.xml') for n in names)\n        print('PASS',archive,': all 6 launcher icon images and splash match the supplied Store logo pixel for pixel; adaptive assets included')\nprint('Store icon SHA256',hashlib.sha256(Path('play-store-icon-v6-512.png').read_bytes()).hexdigest())\nVERIFY\n\"$BRAND_PYTHON\" verify-branding.py | tee branding-verification.txt\nkeytool -printcert -jarfile app-release-v6.aab > certificate-info.txt\ngrep -q '13:56:36:39:C5:9E:78:CB:AA:E1:D3:8B:35:9F:8C:7E:BF:28:B1:DA:51:32:F4:27:E1:FB:FC:D7:3E:50:69:39' certificate-info.txt\n"
+    - name: Remove temporary signing credentials
+      if: always()
+      run: rm -f genzvid/build.json signing/genzvid-release.keystore signing/ANDROID_KEYSTORE_BASE64.txt
+    - name: Upload verified v6 AAB, test APK and matching Play Store icon
+      uses: actions/upload-artifact@v4
+      with:
+        name: GEN_Z_VID-v6-signed-with-matching-icon
+        path: 'app-release-v6.aab
+
+          app-release-v6.apk
+
+          play-store-icon-v6-512.png
+
+          branding-verification.txt'
+        if-no-files-found: error
+        retention-days: 30
+    - name: Publish Android v6 with matching submission icon
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: 'set -euo pipefail
+
+        sha256sum app-release-v6.aab app-release-v6.apk play-store-icon-v6-512.png > SHA256SUMS-android-v6.txt
+
+        cat > "$RUNNER_TEMP/android-v6-notes.txt" <<''NOTES''
+
+        GEN Z VID Android v6. Package com.pmbsiam.genzvid, versionCode 6, versionName 1.0.5.
+
+        Signed using the existing Android release key in repository Actions secrets.
+
+        Use app-release-v6.aab for Google Play, app-release-v6.apk for phone testing, and play-store-icon-v6-512.png as the Store listing icon. Replace the previous listing icon too.
+
+        Launcher/round/adaptive icons and animated splash use the user-supplied neon GEN Z VID logo. CI compares packaged launcher and splash pixels with the Store image.
+
+        Primary: https://gen-z-vid-supabase.mirpurentertainmentn.chatgpt.site/
+
+        Backup: https://genzvid.pmbsiamofficial.com/
+
+        On startup, choose backup only when the main origin fails its bounded HTTP/content check. If both fail, show retry instead of launching a broken page. Auth navigation remains within the selected browser session; no cross-origin token transfer.
+
+        Trusted Web Activity on supported browsers after origin verification; Custom Tab fallback. Browser UI may appear when origin verification or browser support is unavailable, including authentication provider origins.
+
+        Website/callback reachability, app links, signing, versions and exact packaged logo images are checked in CI. Complete Google login and offline behavior on a physical phone still require testing. Play approval is not guaranteed.
+
+        NOTES
+
+        gh release create android-v6 app-release-v6.aab app-release-v6.apk play-store-icon-v6-512.png branding-verification.txt SHA256SUMS-android-v6.txt --target main --title ''GEN Z VID Android v6 - matching neon icon'' --notes-file "$RUNNER_TEMP/android-v6-notes.txt"
+
+        '
+    name: Signed Android v6 / 1.0.5 with verified brand icons
