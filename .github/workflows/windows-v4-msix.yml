@@ -6,10 +6,12 @@ name: Build GEN Z VID MSIX v4
         description: Exact Package/Identity/Name from MSIX Product identity; leave empty for DRAFT
         required: false
         type: string
+        default: PMBSIAM.Gen-Z-Vid
       identity_publisher:
         description: Exact Package/Identity/Publisher (CN=...) from MSIX Product identity
         required: false
         type: string
+        default: CN=DBEB783C-D668-4059-A3F1-F35B11474688
       publisher_display_name:
         description: Exact Store PublisherDisplayName
         required: false
@@ -18,11 +20,13 @@ name: Build GEN Z VID MSIX v4
       display_name:
         description: Reserved Store display name
         required: false
-        default: GEN Z VID
+        default: GEN-Z-VID
         type: string
   push:
-    branches: [main]
-    paths: [.github/workflows/windows-v4-msix.yml]
+    branches:
+    - main
+    paths:
+    - .github/workflows/windows-v4-msix.yml
 permissions:
   contents: write
 jobs:
@@ -181,6 +185,15 @@ jobs:
 
         Write-Host ''Unsigned MSIX. Correct Store identity is required for Store upload. No claim of device installation or WACK certification.''
 
+
+        if($manifest.Package.Identity.Name -cne ''PMBSIAM.Gen-Z-Vid''){throw ''Store identity name mismatch''}
+
+        if($manifest.Package.Identity.Publisher -cne ''CN=DBEB783C-D668-4059-A3F1-F35B11474688''){throw ''Store publisher mismatch''}
+
+        if($manifest.Package.Properties.DisplayName -cne ''GEN-Z-VID''){throw ''Reserved display name mismatch''}
+
+        Write-Host ''PASS Store identity: PMBSIAM.Gen-Z-Vid; CN=DBEB783C-D668-4059-A3F1-F35B11474688; GEN-Z-VID''
+
         '
     - name: Upload MSIX and identity report
       uses: actions/upload-artifact@v4
@@ -198,11 +211,11 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
       run: "set -euo pipefail\nfile=$(find desktop/dist -maxdepth 1 -name '*.msix' -print -quit)\nsha256sum \"$file\" > desktop/dist/SHA256SUMS-msix-v4.txt\nif [[ \"$file\" == *DRAFT* ]]; then\n tag=\"windows-v4-msix-draft-$GITHUB_RUN_ID\"\n title='GEN Z VID v4 MSIX DRAFT - Store identity required'\n cat > \"$RUNNER_TEMP/msix-notes.txt\" <<'NOTES'\nGEN Z VID v4 MSIX DRAFT. App/package version 1.0.1 / 1.0.1.0, x64.\nIncludes purple-blue / gold GEN Z VID app icon and Windows tile assets.\nTHIS DRAFT MUST NOT BE SUBMITTED TO MICROSOFT STORE: it uses development identity, not Partner Center identity.\nRun the same workflow with the exact MSIX Package/Identity/Name, Package/Identity/Publisher and PublisherDisplayName to generate the Store package.\nAn EXE/MSI product ID is not an MSIX package identity.\nUnsigned MSIX is intended for packaging checks. Direct device installation requires an appropriate signing/development setup.\nNOTES\nelse\n tag=\"windows-v4-msix-$GITHUB_RUN_ID\"\n title='GEN\
-        \ Z VID v4 MSIX - Partner Center identity configured'\n cat > \"$RUNNER_TEMP/msix-notes.txt\" <<'NOTES'\nGEN Z VID v4 MSIX. App/package version 1.0.1 / 1.0.1.0, x64.\nUnsigned Store submission package. Verify the accompanying identity report matches your MSIX Partner Center product exactly.\nIncludes branded app and Windows tile icons. Website opens inside the app; Google sign-in uses browser return flow.\nReal device installation, login and Windows App Certification Kit tests are still required. Store certification is not guaranteed.\nMicrosoft signs MSIX after certification; EXE/MSI signing rules differ.\nNOTES\nfi\nprintf '\\nBuild validation: MakeAppx schema validation, package unpack, identity, version, executable and tile assets checked.\\n' >> \"$RUNNER_TEMP/msix-notes.txt\"\ngh release create \"$tag\" \"$file\" desktop/dist/msix-identity.json desktop/dist/SHA256SUMS-msix-v4.txt desktop/build/logo.png --prerelease --target \"$GITHUB_SHA\" --title \"$title\" --notes-file \"\
-        $RUNNER_TEMP/msix-notes.txt\"\n"
+        \ Z VID v4 MSIX - Partner Center identity configured'\n cat > \"$RUNNER_TEMP/msix-notes.txt\" <<'NOTES'\nGEN Z VID v4 MSIX. App/package version 1.0.1 / 1.0.1.0, x64.\nUnsigned Store submission package. Verify the accompanying identity report matches your MSIX Partner Center product exactly.\nIncludes branded app and Windows tile icons. Website opens inside the app; Google sign-in uses browser return flow.\nReal device installation, login and Windows App Certification Kit tests are still required. Store certification is not guaranteed.\nMicrosoft signs MSIX after certification; EXE/MSI signing rules differ.\nNOTES\nfi\nprintf '\\nBuild validation: MakeAppx schema validation, package unpack, identity, version, executable and tile assets checked.\\n' >> \"$RUNNER_TEMP/msix-notes.txt\"\ngh release create \"$tag\" \"$file\" desktop/dist/msix-identity.json desktop/dist/SHA256SUMS-msix-v4.txt desktop/build/logo.png --prerelease --target main --title \"$title\" --notes-file \"$RUNNER_TEMP/msix-notes.txt\"\
+        \n"
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      MSIX_NAME: ${{ inputs.identity_name }}
-      MSIX_PUBLISHER: ${{ inputs.identity_publisher }}
-      MSIX_PUBLISHER_DISPLAY: ${{ inputs.publisher_display_name }}
-      MSIX_DISPLAY: ${{ inputs.display_name }}
+      MSIX_NAME: ${{ inputs.identity_name || 'PMBSIAM.Gen-Z-Vid' }}
+      MSIX_PUBLISHER: ${{ inputs.identity_publisher || 'CN=DBEB783C-D668-4059-A3F1-F35B11474688' }}
+      MSIX_PUBLISHER_DISPLAY: ${{ inputs.publisher_display_name || 'PMB SIAM' }}
+      MSIX_DISPLAY: ${{ inputs.display_name || 'GEN-Z-VID' }}
