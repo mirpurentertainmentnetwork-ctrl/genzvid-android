@@ -20,11 +20,6 @@ name: Build GEN Z VID MSIX v4
         required: false
         default: GEN Z VID
         type: string
-  push:
-    branches:
-    - main
-    paths:
-    - .github/workflows/windows-v4-msix.yml
 permissions:
   contents: write
 jobs:
@@ -81,12 +76,6 @@ jobs:
         })().catch(e=>{console.error(e);process.exit(1)});
 
         ICON'
-    - name: Build offline MSI with embedded logo
-      working-directory: desktop
-      shell: bash
-      run: 'set -euo pipefail
-
-        npx electron-builder --win msi --x64 --publish never'
     - name: Package embedded Windows application
       shell: bash
       working-directory: desktop
