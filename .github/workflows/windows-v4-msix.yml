@@ -20,6 +20,9 @@ name: Build GEN Z VID MSIX v4
         required: false
         default: GEN Z VID
         type: string
+  push:
+    branches: [main]
+    paths: [.github/workflows/windows-v4-msix.yml]
 permissions:
   contents: write
 jobs:
